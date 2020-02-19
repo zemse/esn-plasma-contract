@@ -37,6 +37,7 @@ function getMegaRoot(inputArray) {
         ethers.utils.hexStripZeros(ethers.utils.hexlify(number)),
         true
       ]);
+      console.log(`Received block ${number} from node`);
       blockArray[number] = ({
         blockNumber: number,
         transactionsRoot: block.transactionsRoot,

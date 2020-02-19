@@ -4,7 +4,7 @@
   "description": "Starter template for building smart contracts",
   "scripts": {
     "compile": "node compile.js",
-    "test": "mocha --timeout 30000",
+    "test": "node compile.js && mocha --timeout 30000",
     "deploy": "node deploy.js"
   },
   "author": {

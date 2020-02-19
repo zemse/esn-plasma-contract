@@ -15,8 +15,44 @@ const provider = new ethers.providers.Web3Provider(ganache.provider({ gasLimit: 
 /// @dev importing build file
 const plasmaManagerJSON = require('../build/PlasmaManager_PlasmaManager.json');
 
+const bunchCases = [
+  {
+    startBlockNumber: ethers.utils.bigNumberify(0).toHexString(),
+    bunchDepth: ethers.utils.bigNumberify(10).toHexString(),
+    transactionsMegaRoot: '0x0bcad17ecf260d6506c6b97768bdc2acfb6694445d27ffd3f9c1cfbee4a9bd6d',
+    // receiptsMegaRoot: '0x0bcad17ecf260d6506c6b97768bdc2acfb6694445d27ffd3f9c1cfbee4a9bd6d'
+  },
+  {
+    startBlockNumber: ethers.utils.bigNumberify(1024).toHexString(),
+    bunchDepth: ethers.utils.bigNumberify(10).toHexString(),
+    transactionsMegaRoot: '0x0bcad17ecf260d6506c6b97768bdc2acfb6694445d27ffd3f9c1cfbee4a9bd6d',
+    // receiptsMegaRoot: '0x0bcad17ecf260d6506c6b97768bdc2acfb6694445d27ffd3f9c1cfbee4a9bd6d'
+  },
+];
+
+
 /// @dev initialize global variables
 let accounts, plasmaManagerInstance;
+
+function sliceDataTo32Bytes(data, index = 0) {
+  return '0x'+data.slice(2+64*index, 2+64*(index+1));
+}
+
+async function parseTx(tx) {
+  // console.log(await tx);
+  const r = await (await tx).wait();
+  const gasUsed = r.gasUsed.toNumber();
+  console.group();
+  console.log(`Gas used: ${gasUsed} / ${ethers.utils.formatEther(r.gasUsed.mul(ethers.utils.parseUnits('1','gwei')))} ETH / ${gasUsed / 50000} ERC20 transfers`);
+  r.logs.forEach((log, i) => {
+    console.log(i, 'data', log.data);
+    if(log.topics.length > 1) {
+      console.log('topics', log.topics);
+    }
+  });
+  console.groupEnd();
+  return r;
+}
 
 /// @dev this is a test case collection
 describe('Ganache Setup', async() => {
@@ -70,30 +106,42 @@ describe('Plasma Manager Contract', () => {
 
   describe('Plasma Manager Functionality', async() => {
 
-    /// @dev this is first test case of this collection
-    it('should be able to submit a bunch header', async() => {
+    bunchCases.forEach(bunchCase => {
+      it('should be able to submit a bunch header', async() => {
+        // const header = '0x' + startBlockNumber.slice(2) + bunchDepth.slice(2) + transactionsMegaRoot.slice(2);
+        const headerArray = [
+          bunchCase.startBlockNumber,
+          bunchCase.bunchDepth,
+          bunchCase.transactionsMegaRoot,
+          bunchCase.receiptsMegaRoot || '0x'
+        ];
+        console.log({headerArray});
 
-      /// @dev you sign and submit a transaction to local blockchain (ganache) initialized on line 10.
+        const headerRLP = ethers.utils.RLP.encode(headerArray);
 
-      const startBlockNumber = ethers.utils.bigNumberify(1000).toHexString();
-      const bunchDepth = ethers.utils.bigNumberify(1000).toHexString();
-      const transactionsMegaRoot = '0x0bcad17ecf260d6506c6b97768bdc2acfb6694445d27ffd3f9c1cfbee4a9bd6d';
+        const fullArray = [headerArray];
 
-      const header = '0x' + startBlockNumber.slice(2) + bunchDepth.slice(2) + transactionsMegaRoot.slice(2);
-      let signatures = '0x';
-      for(let i = 0; i <= 2; i++) {
-        const signer = provider.getSigner(accounts[i]);
-        const signat = await signer.signMessage(ethers.utils.arrayify(header));
-        // console.log('signat', signat);
-        signatures += signat.slice(2);
-      }
+        for(let i = 1; i <= 2; i++) {
+          const signer = provider.getSigner(accounts[i]);
+          const signature = await signer.signMessage(ethers.utils.arrayify(headerRLP));
+          fullArray.push(signature);
+        }
 
-      console.log(signatures);
+        const fullRLP = ethers.utils.RLP.encode(fullArray);
 
-      const tx = await plasmaManagerInstance.functions.submitBunchHeader(header, signatures);
+        console.log({fullArray, fullRLP});
 
-      const signers = await plasmaManagerInstance.functions.getAllSigners();
-      console.log('signers', signers);
+        const receipt = await parseTx(plasmaManagerInstance.functions.submitBunchHeader(fullRLP));
+        const index = sliceDataTo32Bytes(receipt.logs[3].data, 2);
+
+        const bunchHeader = await plasmaManagerInstance.functions.bunches(index);
+        console.log({bunchHeader});
+
+        // console.log();
+        //
+        // const signers = await plasmaManagerInstance.functions.getAllSigners();
+        // console.log('signers', signers);
+      });
     });
   });
 });
