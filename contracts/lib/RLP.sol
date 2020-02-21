@@ -48,7 +48,7 @@ library RLP {
   /*
   * @param item RLP encoded bytes
   */
-  function toRlpItem(bytes memory item) internal pure returns (RLPItem memory) {
+  function toRLPItem(bytes memory item) internal pure returns (RLPItem memory) {
     uint memPtr;
     assembly {
       memPtr := add(item, 0x20)
@@ -121,7 +121,7 @@ library RLP {
   /** RLPItem conversions into data types **/
 
   // @returns raw rlp encoding in bytes
-  function toRlpBytes(RLPItem memory item) internal pure returns (bytes memory) {
+  function toRLPBytes(RLPItem memory item) internal pure returns (bytes memory) {
     bytes memory result = new bytes(item.len);
     if (result.length == 0) return result;
 
@@ -201,6 +201,25 @@ library RLP {
 
     copy(item.memPtr + offset, destPtr, len);
     return result;
+  }
+
+  event BytesM(bytes _bytes, string _m);
+  event Uint256M(uint256 _num, string _m);
+  function toData(RLPItem memory item) internal pure returns (bytes memory bts) {
+    require(!isList(item));
+    uint offset = _payloadOffset(item.memPtr);
+    uint len = item.len - offset;
+    bts = new bytes(len);
+    uint btsPtr;
+    assembly {
+      btsPtr := add(0x20, bts)
+    }
+
+    copy(item.memPtr+offset, btsPtr, len);
+  }
+
+  function toBytes32(RLPItem memory item) internal pure returns (bytes32) {
+    return bytes32(toUint(item));
   }
 
   /*

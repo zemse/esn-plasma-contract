@@ -14,6 +14,7 @@
   },
   "license": "ISC",
   "dependencies": {
+    "eth-proof": "^2.1.4",
     "ethers": "4.0.41",
     "fs-extra": "8.1.0",
     "ganache-cli": "6.4.5",

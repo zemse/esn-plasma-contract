@@ -1,6 +1,8 @@
 pragma solidity 0.6.2;
 
-import 'RLP.sol';
+// import 'lib/ECVerify.sol';
+import 'lib/RLP.sol';
+import 'lib/MerklePatriciaProof.sol';
 
 // this contract will store block headers
 contract PlasmaManager {
@@ -15,16 +17,24 @@ contract PlasmaManager {
   }
 
   uint256 public numberOfValidators;
-  mapping(address => bool) public validatorMapping;
+  mapping(address => bool) public isValidator;
   address[] public validators;
   address[] public signers;
   BunchHeader[] public bunches;
 
   bytes constant PERSONAL_PREFIX = "\x19Ethereum Signed Message:\n";
 
-  bytes public zemse;
+  uint8 public zemse;
 
+  event Bytes(bytes _bytes);
+  event BytesM(bytes _bytes, string _m);
+  event Byte(byte _byte);
   event Bytes32(bytes32 _bytes32);
+  event Bytes32M(bytes32 _bytes32, string _m);
+  event Uint256(uint256 _uint256);
+  event Uint256M(uint256 _num, string _m);
+  event Uint8(uint8 _uint8);
+  event Bool(bool _bool);
   event Address(address _address);
   event NewBunchHeader(
     uint256 _startBlockNumber,
@@ -34,7 +44,7 @@ contract PlasmaManager {
 
   constructor(address[] memory _validators) public {
     for(uint256 _i = 0; _i < _validators.length; _i++) {
-      validatorMapping[_validators[_i]] = true;
+      isValidator[_validators[_i]] = true;
     }
     numberOfValidators = _validators.length;
     validators = _validators;
@@ -49,38 +59,32 @@ contract PlasmaManager {
   }
 
   function submitBunchHeader(bytes memory _signedHeader) public returns (address[] memory) {
-    RLP.RLPItem[] memory _fullList = _signedHeader.toRlpItem().toList();
-
+    RLP.RLPItem[] memory _fullList = _signedHeader.toRLPItem().toList();
     RLP.RLPItem[] memory _headerArray = _fullList[0].toList();
-
     require(_headerArray.length == 4, 'bunch header must have 4 members');
-
-    bytes memory _transactionsMegaRoot = _headerArray[2].toBytes();
-    bytes memory _receiptsMegaRoot = _headerArray[3].toBytes();
-
-    require(_transactionsMegaRoot.length == 32, 'transaction root must have 32 bytes');
-    require(_receiptsMegaRoot.length == 32 || _receiptsMegaRoot.length == 0, 'receipt root must have 32 bytes or empty');
 
     BunchHeader memory _bunchHeader = BunchHeader({
       startBlockNumber: _headerArray[0].toUint(),
       bunchDepth: _headerArray[1].toUint(),
-      transactionsMegaRoot: bytesMemoryToBytes32(_transactionsMegaRoot),
-      receiptsMegaRoot: bytesMemoryToBytes32(_receiptsMegaRoot)
+      transactionsMegaRoot: _headerArray[2].toBytes32(),
+      receiptsMegaRoot: _headerArray[3].toBytes32()
     });
 
     require(_bunchHeader.startBlockNumber == getNextStartBlockNumber(), 'invalid start block number');
 
-    bytes memory _headerRlp = _fullList[0].toRlpBytes();
+    bytes memory _headerRLP = _fullList[0].toRLPBytes();
 
     bytes32 _digest = keccak256(
       abi.encodePacked(
         PERSONAL_PREFIX,
-        _getBytesStr(_headerRlp.length),
-        _headerRlp
+        _getBytesStr(_headerRLP.length),
+        _headerRLP
       )
     );
 
     emit Bytes32(_digest);
+
+    uint256 _numberOfValidSignatures;
 
     for(uint256 i = 1; i < _fullList.length; i++) {
       bytes memory _signature = _fullList[i].toBytes();
@@ -100,8 +104,15 @@ contract PlasmaManager {
       require(_v == 27 || _v == 28, 'invalid recovery value');
 
       address _signer = ecrecover(_digest, _v, _r, _s);
+
+      // (bool _success, address _signer) = ECVerify.ecrecovery(_digest, _signature);
+
+      if(isValidator[_signer]) _numberOfValidSignatures++;
+
       emit Address(_signer);
     }
+
+    require(_numberOfValidSignatures > numberOfValidators * 66 / 100, '66% validators should sign');
 
     uint256 _bunchIndex = bunches.length;
 
@@ -110,18 +121,33 @@ contract PlasmaManager {
     emit NewBunchHeader(_bunchHeader.startBlockNumber, _bunchHeader.bunchDepth, _bunchIndex);
   }
 
+  function claimWithdrawal(
+    bytes memory _rawTransactionProof
+  ) public {
+    RLP.RLPItem[] memory _decodedProof = _rawTransactionProof.toRLPItem().toList();
+    // uint256
+
+    bytes memory _rawTx = _decodedProof[0].toBytes();
+    bytes memory _txIndex = _decodedProof[1].toBytes();
+    bytes memory _txInBlockProof = _decodedProof[2].toBytes();
+    bytes32 _txRoot = _decodedProof[3].toBytes32();
+
+    require(
+      MerklePatriciaProof.verify(_rawTx, _txIndex, _txInBlockProof, _txRoot)
+      , 'Invalid Merkle Patricia Proof'
+    );
+
+    /// now check for bunch inclusion proof
+
+    // emit Bool(_outp);
+  }
 
   function getNextStartBlockNumber() private view returns (uint256) {
     if(bunches.length == 0) return 0;
     return bunches[bunches.length - 1].startBlockNumber + 2**bunches[bunches.length - 1].bunchDepth;
   }
 
-  function bytesMemoryToBytes32(bytes memory _bytes) private pure returns (bytes32 _bytes32) {
-    assembly {
-      let _pointer := add(_bytes, 0x20)
-      _bytes32 := mload(_pointer)
-    }
-  }
+
 
 
   // / @notice Used to get a number's utf8 representation

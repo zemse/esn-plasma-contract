@@ -9,6 +9,11 @@ const assert = require('assert');
 const ethers = require('ethers');
 const ganache = require('ganache-cli');
 
+/// @dev connecting to a Era Swap Network Node
+const { GetProof } = require('eth-proof');
+const esnNodeUrl = 'http://13.127.185.136:80';
+const getProof = new GetProof(esnNodeUrl);
+
 /// @dev initialising development blockchain
 const provider = new ethers.providers.Web3Provider(ganache.provider({ gasLimit: 8000000 }));
 
@@ -22,32 +27,40 @@ const bunchCases = [
     transactionsMegaRoot: '0x0bcad17ecf260d6506c6b97768bdc2acfb6694445d27ffd3f9c1cfbee4a9bd6d',
     // receiptsMegaRoot: '0x0bcad17ecf260d6506c6b97768bdc2acfb6694445d27ffd3f9c1cfbee4a9bd6d'
   },
-  {
-    startBlockNumber: ethers.utils.bigNumberify(1024).toHexString(),
-    bunchDepth: ethers.utils.bigNumberify(10).toHexString(),
-    transactionsMegaRoot: '0x0bcad17ecf260d6506c6b97768bdc2acfb6694445d27ffd3f9c1cfbee4a9bd6d',
-    // receiptsMegaRoot: '0x0bcad17ecf260d6506c6b97768bdc2acfb6694445d27ffd3f9c1cfbee4a9bd6d'
-  },
+  // {
+  //   startBlockNumber: ethers.utils.bigNumberify(1024).toHexString(),
+  //   bunchDepth: ethers.utils.bigNumberify(10).toHexString(),
+  //   transactionsMegaRoot: '0x0bcad17ecf260d6506c6b97768bdc2acfb6694445d27ffd3f9c1cfbee4a9bd6d',
+  //   // receiptsMegaRoot: '0x0bcad17ecf260d6506c6b97768bdc2acfb6694445d27ffd3f9c1cfbee4a9bd6d'
+  // },
 ];
-
 
 /// @dev initialize global variables
 let accounts, plasmaManagerInstance;
 
-function sliceDataTo32Bytes(data, index = 0) {
-  return '0x'+data.slice(2+64*index, 2+64*(index+1));
+function removeNumericKeysFromStruct(inputStruct) {
+  return Object.fromEntries(Object.entries(inputStruct).filter((entry, i) => {
+    if(entry[0] === 'length') return false;
+    if(entry[0] === String(i)) return false;
+    return true;
+  }));
 }
 
 async function parseTx(tx) {
-  // console.log(await tx);
   const r = await (await tx).wait();
   const gasUsed = r.gasUsed.toNumber();
   console.group();
   console.log(`Gas used: ${gasUsed} / ${ethers.utils.formatEther(r.gasUsed.mul(ethers.utils.parseUnits('1','gwei')))} ETH / ${gasUsed / 50000} ERC20 transfers`);
   r.logs.forEach((log, i) => {
-    console.log(i, 'data', log.data);
-    if(log.topics.length > 1) {
-      console.log('topics', log.topics);
+    // console.log(i, 'data', log.data);
+    if(plasmaManagerInstance) {
+      const output = plasmaManagerInstance.interface.parseLog(log);
+      if(!output) {
+        console.log({log})
+      } else {
+        const values = removeNumericKeysFromStruct(output.values);
+        console.log(i, output.name, values);
+      }
     }
   });
   console.groupEnd();
@@ -79,6 +92,8 @@ describe('Plasma Manager Contract', () => {
 
       /// @dev you create a contract factory for deploying contract. Refer to ethers.js documentation at https://docs.ethers.io/ethers.js/html/
       // console.log(plasmaManagerJSON.abi);
+
+      console.log({bytecodelength: plasmaManagerJSON.evm.bytecode.object.length});
       const PlasmaManagerContractFactory = new ethers.ContractFactory(
         plasmaManagerJSON.abi,
         plasmaManagerJSON.evm.bytecode.object,
@@ -87,6 +102,8 @@ describe('Plasma Manager Contract', () => {
       plasmaManagerInstance =  await PlasmaManagerContractFactory.deploy([
         accounts[0], accounts[1], accounts[2]
       ]);
+      const receipt = await plasmaManagerInstance.deployTransaction.wait()
+      console.log({gasUsed: receipt.cumulativeGasUsed.toNumber()});
 
       assert.ok(plasmaManagerInstance.address, 'conract address should be present');
     });
@@ -100,7 +117,8 @@ describe('Plasma Manager Contract', () => {
       console.log('validators', validators);
 
       /// @dev then you compare it with your expectation value
-      validators.forEach((address, index) => assert.equal(address, accounts[index], `Validator at index ${index} should be properly set`));
+      validators.forEach(
+        (address, index) => assert.equal(address, accounts[index], `Validator at index ${index} should be properly set`));
     });
   });
 
@@ -108,14 +126,15 @@ describe('Plasma Manager Contract', () => {
 
     bunchCases.forEach(bunchCase => {
       it('should be able to submit a bunch header', async() => {
+        console.log('Submitting Bunch Header');
         // const header = '0x' + startBlockNumber.slice(2) + bunchDepth.slice(2) + transactionsMegaRoot.slice(2);
         const headerArray = [
           bunchCase.startBlockNumber,
           bunchCase.bunchDepth,
           bunchCase.transactionsMegaRoot,
-          bunchCase.receiptsMegaRoot || '0x'
+          bunchCase.receiptsMegaRoot || ethers.constants.HashZero
         ];
-        console.log({headerArray});
+        // console.log({headerArray});
 
         const headerRLP = ethers.utils.RLP.encode(headerArray);
 
@@ -129,19 +148,45 @@ describe('Plasma Manager Contract', () => {
 
         const fullRLP = ethers.utils.RLP.encode(fullArray);
 
-        console.log({fullArray, fullRLP});
+        console.log({fullArray});
 
         const receipt = await parseTx(plasmaManagerInstance.functions.submitBunchHeader(fullRLP));
-        const index = sliceDataTo32Bytes(receipt.logs[3].data, 2);
+        const parsedLog = plasmaManagerInstance.interface.parseLog(receipt.logs[3]);
+        const index = parsedLog.values._bunchIndex.toNumber();
 
         const bunchHeader = await plasmaManagerInstance.functions.bunches(index);
-        console.log({bunchHeader});
-
-        // console.log();
-        //
-        // const signers = await plasmaManagerInstance.functions.getAllSigners();
-        // console.log('signers', signers);
+        Object.entries(removeNumericKeysFromStruct(bunchHeader)).forEach((entry, i) => {
+          const errorMessage = `Bunch header submission mismatch for ${entry[0]}`;
+          if(entry[1] instanceof ethers.utils.BigNumber) {
+            assert.ok(entry[1].eq(headerArray[i]), errorMessage);
+          } else {
+            assert.equal(entry[1], headerArray[i], errorMessage);
+          }
+        });
       });
+    });
+
+    it('check proof', async() => {
+      console.log('Sending Proof');
+      const txHash = '0xa0e58a664cbcce35a8d0d2e95a85f1415b54dd130d602e93d221a16c21569b05';
+      const merklePatriciaProofObj = await getProof.transactionProof(txHash);
+
+      // console.log({merklePatriciaProofObj});
+
+      const providerESN = new ethers.providers.JsonRpcProvider(esnNodeUrl);
+      const txObj = await providerESN.getTransaction(txHash);
+
+      const rawTransaction = txObj.raw;
+      const path = '0x00' + merklePatriciaProofObj.txIndex.slice(2);
+      const parentNodes = ethers.utils.RLP.encode(merklePatriciaProofObj.txProof)
+      const txRoot = '0x' + merklePatriciaProofObj.header[4].toString('hex')
+
+      const completeProofArray = [rawTransaction, path, parentNodes, txRoot];
+      const completeProofRLP = ethers.utils.RLP.encode(completeProofArray);
+
+      await parseTx(
+        plasmaManagerInstance.functions.claimWithdrawal(completeProofRLP)
+      );
     });
   });
 });
