@@ -20,9 +20,10 @@ const providerESN = new ethers.providers.JsonRpcProvider(esnNodeUrl);
 
 /// @dev importing build file
 const plasmaManagerJSON = require('../build/PlasmaManager_PlasmaManager.json');
+const esJSON = require('../build/ERC20_ERC20.json');
 
 /// @dev initialize global variables
-let accounts, plasmaManagerInstance;
+let accounts, esInstance, plasmaManagerInstance;
 
 const bunchDepthCases = [1,2,3,2,1]; // bunch cases will be prepared according to this.
 // proofs will be generated for this transaction on ESN.
@@ -194,14 +195,13 @@ async function parseTx(tx) {
   console.log(`Gas used: ${gasUsed} / ${ethers.utils.formatEther(r.gasUsed.mul(ethers.utils.parseUnits('1','gwei')))} ETH / ${gasUsed / 50000} ERC20 transfers`);
   r.logs.forEach((log, i) => {
     // console.log(i, 'data', log.data);
-    if(plasmaManagerInstance) {
-      const output = plasmaManagerInstance.interface.parseLog(log);
-      if(!output) {
-        console.log({log})
-      } else {
-        const values = removeNumericKeysFromStruct(output.values);
-        console.log(i, output.name, values);
-      }
+    const output = plasmaManagerInstance.interface.parseLog(log)
+     || esInstance.interface.parseLog(log);
+    if(!output) {
+      console.log({log})
+    } else {
+      const values = removeNumericKeysFromStruct(output.values);
+      console.log(i, output.name, values);
     }
   });
   console.groupEnd();
@@ -222,6 +222,17 @@ describe('Ganache Setup', async() => {
   });
 });
 
+describe('Era Swap Token setup', async() => {
+  it('deploys ERC20 contract', async() => {
+    const ESContractFactory = new ethers.ContractFactory(
+      esJSON.abi,
+      esJSON.evm.bytecode.object,
+      provider.getSigner(accounts[0])
+    );
+    esInstance =  await ESContractFactory.deploy();
+  });
+});
+
 /// @dev this is another test case collection
 describe('Plasma Manager Contract', () => {
 
@@ -235,16 +246,17 @@ describe('Plasma Manager Contract', () => {
       // console.log(plasmaManagerJSON.abi);
 
       console.log({bytecodelength: plasmaManagerJSON.evm.bytecode.object.length});
-      console.log({bytecode: plasmaManagerJSON.evm.bytecode.object});
+      // console.log({bytecode: plasmaManagerJSON.evm.bytecode.object});
       const PlasmaManagerContractFactory = new ethers.ContractFactory(
         plasmaManagerJSON.abi,
         plasmaManagerJSON.evm.bytecode.object,
         provider.getSigner(accounts[0])
       );
-      plasmaManagerInstance =  await PlasmaManagerContractFactory.deploy([
-        accounts[0], accounts[1], accounts[2]
-      ]);
-      const receipt = await plasmaManagerInstance.deployTransaction.wait()
+      plasmaManagerInstance =  await PlasmaManagerContractFactory.deploy(
+        [accounts[0], accounts[1], accounts[2]],
+        esInstance.address
+      );
+      const receipt = await plasmaManagerInstance.deployTransaction.wait();
       console.log({gasUsed: receipt.cumulativeGasUsed.toNumber()});
 
       assert.ok(plasmaManagerInstance.address, 'conract address should be present');
@@ -261,6 +273,12 @@ describe('Plasma Manager Contract', () => {
       /// @dev then you compare it with your expectation value
       validators.forEach(
         (address, index) => assert.equal(address, accounts[index], `Validator at index ${index} should be properly set`));
+    });
+
+    it('transfering some ES to plasma manager contract', async() => {
+      await parseTx(
+        esInstance.functions.transfer(plasmaManagerInstance.address, ethers.utils.parseEther('1000000'))
+      );
     });
   });
 
@@ -325,7 +343,7 @@ describe('Plasma Manager Contract', () => {
       if(bunchIndexOfTransaction === null) assert.ok(false, 'transaction hash not yet on plasma');
 
       const txObj = await providerESN.getTransaction(provingTxHash);
-      // console.log({txObj});
+      console.log({txObj});
 
       const bunchStruct = await plasmaManagerInstance.functions.bunches(bunchIndexOfTransaction);
 
@@ -356,6 +374,14 @@ describe('Plasma Manager Contract', () => {
       await parseTx(
         plasmaManagerInstance.functions.claimWithdrawal(completeProofRLP)
       );
+    });
+
+    it('checking parseTransaction with a tx without chain id', async() => {
+      const parsedTx = await plasmaManagerInstance.functions.parseTransaction('0xf86982119e80827530943d2bb9d34d96307942b7cce133bbf1aad361c5298817908200ec9d0000801ca08f38797a9013772c45e890a56bc82c24c51d06f895546fc80177754b01e7ce57a06da71f056b58608be916174b53e687c2bd3eddc6900f5f520be4c69d0a138fea');
+      console.log({parsedTx});
+
+      assert.equal(parsedTx[0], '0xC8e1F3B9a0CdFceF9fFd2343B943989A22517b26', 'signer address should be correct');
+      assert.ok(parsedTx[1].eq(ethers.utils.parseEther('1.698')), 'signer address should be correct');
     });
   });
 });

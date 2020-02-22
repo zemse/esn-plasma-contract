@@ -173,6 +173,27 @@ library RLP {
     return result;
   }
 
+  function toUint8(RLPItem memory item) internal pure returns (uint8) {
+    require(item.len > 0 && item.len <= 33);
+
+    uint offset = _payloadOffset(item.memPtr);
+    uint len = item.len - offset;
+
+    uint8 result;
+    uint memPtr = item.memPtr + offset;
+    assembly {
+      result := mload(memPtr)
+
+      // shfit to the correct location if neccesary
+      if lt(len, 32) {
+          result := div(result, exp(256, sub(32, len)))
+      }
+    }
+
+    return result;
+  }
+
+
   // enforces 32 byte length
   function toUintStrict(RLPItem memory item) internal pure returns (uint) {
     // one byte prefix

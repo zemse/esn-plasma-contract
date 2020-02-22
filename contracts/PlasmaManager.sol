@@ -1,9 +1,11 @@
 pragma solidity 0.6.3;
 
+import 'ERC20.sol';
 // import 'lib/ECVerify.sol';
 import 'lib/RLP.sol';
 import 'lib/Merkle.sol';
 import 'lib/MerklePatriciaProof.sol';
+import 'lib/RLPEncode.sol';
 
 // this contract will store block headers
 contract PlasmaManager {
@@ -19,11 +21,17 @@ contract PlasmaManager {
 
   uint256 public numberOfValidators;
   mapping(address => bool) public isValidator;
+  mapping(bytes32 => bool) public processedWithdrawals;
   address[] public validators;
   address[] public signers;
   BunchHeader[] public bunches;
 
   bytes constant PERSONAL_PREFIX = "\x19Ethereum Signed Message:\n";
+  bytes constant CHAIN_ID = hex"2323";
+  // bytes constant chainId = hex"62fa"; final this chain id
+
+  ERC20 public token;
+  address public plasmaOnESN;
 
   uint8 public zemse;
 
@@ -43,12 +51,14 @@ contract PlasmaManager {
     uint256 _bunchIndex
   );
 
-  constructor(address[] memory _validators) public {
+  constructor(address[] memory _validators, ERC20 _token) public {
     for(uint256 _i = 0; _i < _validators.length; _i++) {
       isValidator[_validators[_i]] = true;
     }
     numberOfValidators = _validators.length;
     validators = _validators;
+
+    token = _token;
   }
 
   function getAllValidators() public view returns (address[] memory) {
@@ -61,6 +71,10 @@ contract PlasmaManager {
 
   function lastBunchIndex() public view returns (uint256) {
     return bunches.length;
+  }
+
+  function setPlasmaOnESNAddress(address _plasmaOnESN) public {
+    plasmaOnESN = _plasmaOnESN;
   }
 
   function submitBunchHeader(bytes memory _signedHeader) public {
@@ -130,7 +144,7 @@ contract PlasmaManager {
     bytes memory _rawTransactionProof
   ) public {
     RLP.RLPItem[] memory _decodedProof = _rawTransactionProof.toRLPItem().toList();
-    // uint256
+
     uint256 _bunchIndex = _decodedProof[0].toUint();
     uint256 _blockNumber = _decodedProof[1].toUint();
     bytes memory _blockInBunchProof = _decodedProof[2].toBytes();
@@ -139,21 +153,88 @@ contract PlasmaManager {
     bytes memory _txIndex = _decodedProof[5].toBytes();
     bytes memory _txInBlockProof = _decodedProof[6].toBytes();
 
+    bytes32 _txHash = keccak256(_rawTx);
+
+    require(
+      !processedWithdrawals[_txHash]
+      , 'Already processed withdrawal for this transaction'
+    );
+
     require(
       MerklePatriciaProof.verify(_rawTx, _txIndex, _txInBlockProof, _txRoot)
       , 'Invalid Merkle Patricia Proof'
     );
 
     /// now check for bunch inclusion proof
-    bool _outp = verifyMerkleProof(
-    // bool _outp = Merkle.verify(
-      _txRoot, // data to verify
-      _blockNumber - bunches[_bunchIndex].startBlockNumber,
-      bunches[_bunchIndex].transactionsMegaRoot,
-      _blockInBunchProof
+    // bool _outp = verifyMerkleProof(
+    // // bool _outp = Merkle.verify(
+    //   _txRoot, // data to verify
+    //   _blockNumber - bunches[_bunchIndex].startBlockNumber,
+    //   bunches[_bunchIndex].transactionsMegaRoot,
+    //   _blockInBunchProof
+    // );
+
+    require(
+      verifyMerkleProof(
+        _txRoot, // data to verify
+        _blockNumber - bunches[_bunchIndex].startBlockNumber,
+        bunches[_bunchIndex].transactionsMegaRoot,
+        _blockInBunchProof
+      )
+      , 'Invalid Merkle Proof'
     );
 
-    emit Bool(_outp);
+    (address _signer, uint256 _value) = parseTransaction(_rawTx);
+
+    // to of the transaction should be plasmaOnESN address
+
+    processedWithdrawals[_txHash] = true;
+
+    token.transfer(_signer, _value);
+  }
+
+  function parseTransaction(bytes memory _rawTx) public pure returns (address, uint256) {
+    RLP.RLPItem[] memory _txDecoded = _rawTx.toRLPItem().toList();
+
+    uint256 _value = _txDecoded[4].toUint();
+
+    uint256 _v = _txDecoded[6].toUint();
+    bytes32 _r = _txDecoded[7].toBytes32();
+    bytes32 _s = _txDecoded[8].toBytes32();
+
+    bytes[] memory _unsignedTransactionList;
+
+    uint8 _actualV;
+
+    if(_v > 28) {
+      _unsignedTransactionList = new bytes[](9);
+      if(_v % 2 == 0) {
+        _actualV = 28;
+        // _hey[6] = abi.encodePacked((_v - 36) / 2);
+      } else {
+        _actualV = 27;
+      }
+      _unsignedTransactionList[6] = CHAIN_ID;
+    } else {
+      _unsignedTransactionList = new bytes[](6);
+      _actualV = uint8(_v);
+    }
+
+    for(uint256 i = 0; i < 6; i++) {
+      _unsignedTransactionList[i] = _txDecoded[i].toBytes();
+    }
+
+    bytes memory _unsignedTransaction = RLPEncode.encodeList(_unsignedTransactionList);
+    //
+    // emit Uint256(_v);
+    // emit Uint8(_actualV);
+    // emit Bytes32M(_r, 'r');
+    // emit Bytes32M(_s, 's');
+
+    address _signer = ecrecover(keccak256(_unsignedTransaction), _actualV, _r, _s);
+    // emit Address(_signer);
+
+    return (_signer, _value);
   }
 
   function verifyMerkleProof(
