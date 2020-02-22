@@ -5,8 +5,8 @@ const ethers = require('ethers');
 
 const BLOCK_HEADER = {
   START_BLOCK_NUMBER: 0,
-  BUNCH_DEPTH: 2,
-  TX_MEGA_ROOT: '0xbeb71f2befb15738bb8afa37321f4edc7ab0632d44cca6d428406326e9350fac'
+  BUNCH_DEPTH: 3,
+  TX_MEGA_ROOT: '0x2fab0c864cc829f6a24fd69db5e9a8057413fd86e3f9e9e997825d780259508e'
 };
 
 
@@ -56,9 +56,9 @@ function verifyTxRootAgainTxMegaRoot(
 // const blockNumberToVerify = Number(process.argv[3]);
 // const proofOfInclusion = process.argv[4];
 
-const txRoot = '0x637d0a967d87afee13c1523c7cab9018d3fe3fad9ee709ab499f104f85f7c7ee';
-const blockNumberToVerify = 2;
-const proofOfInclusion = '0xa5b23188a2023f264d28c89a247091fde93ed4cd333148b6d6a6b4a8212b0a2d64bbca4f5db3b9a11d767673cbb0bb8c0f8524a0f864b918dc5b0a4c367c21ab';
+const txRoot = process.argv[3] || '0x637d0a967d87afee13c1523c7cab9018d3fe3fad9ee709ab499f104f85f7c7ee';
+const blockNumberToVerify = +process.argv[4] || 2;
+const proofOfInclusion = process.argv[2] || '0x637d0a967d87afee13c1523c7cab9018d3fe3fad9ee709ab499f104f85f7c7ee64bbca4f5db3b9a11d767673cbb0bb8c0f8524a0f864b918dc5b0a4c367c21ab2922c92699ee1dc81ad68d1adbf7bbae37a965c00b9a2c1ae1ca831a2ae2d081';
 
 console.log(
   verifyTxRootAgainTxMegaRoot(

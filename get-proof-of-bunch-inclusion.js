@@ -67,6 +67,6 @@ function getProofOfBunchInclusion(inputArray, index, proof = '0x') {
   let txRootArray = blockArray.map(block => block.transactionsRoot);
   console.log('txRootArray', txRootArray);
 
-  console.log('getProofOfBunchInclusion', getProofOfBunchInclusion(txRootArray, proofofInclusionForBlockNumber));
+  console.log('getProofOfBunchInclusion', getProofOfBunchInclusion(txRootArray, proofofInclusionForBlockNumber), txRootArray[proofofInclusionForBlockNumber]);
 
 })();

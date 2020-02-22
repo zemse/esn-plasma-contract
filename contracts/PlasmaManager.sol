@@ -1,7 +1,8 @@
-pragma solidity 0.6.2;
+pragma solidity 0.6.3;
 
 // import 'lib/ECVerify.sol';
 import 'lib/RLP.sol';
+import 'lib/Merkle.sol';
 import 'lib/MerklePatriciaProof.sol';
 
 // this contract will store block headers
@@ -58,7 +59,11 @@ contract PlasmaManager {
     return signers;
   }
 
-  function submitBunchHeader(bytes memory _signedHeader) public returns (address[] memory) {
+  function lastBunchIndex() public view returns (uint256) {
+    return bunches.length;
+  }
+
+  function submitBunchHeader(bytes memory _signedHeader) public {
     RLP.RLPItem[] memory _fullList = _signedHeader.toRLPItem().toList();
     RLP.RLPItem[] memory _headerArray = _fullList[0].toList();
     require(_headerArray.length == 4, 'bunch header must have 4 members');
@@ -126,11 +131,13 @@ contract PlasmaManager {
   ) public {
     RLP.RLPItem[] memory _decodedProof = _rawTransactionProof.toRLPItem().toList();
     // uint256
-
-    bytes memory _rawTx = _decodedProof[0].toBytes();
-    bytes memory _txIndex = _decodedProof[1].toBytes();
-    bytes memory _txInBlockProof = _decodedProof[2].toBytes();
+    uint256 _bunchIndex = _decodedProof[0].toUint();
+    uint256 _blockNumber = _decodedProof[1].toUint();
+    bytes memory _blockInBunchProof = _decodedProof[2].toBytes();
     bytes32 _txRoot = _decodedProof[3].toBytes32();
+    bytes memory _rawTx = _decodedProof[4].toBytes();
+    bytes memory _txIndex = _decodedProof[5].toBytes();
+    bytes memory _txInBlockProof = _decodedProof[6].toBytes();
 
     require(
       MerklePatriciaProof.verify(_rawTx, _txIndex, _txInBlockProof, _txRoot)
@@ -138,8 +145,46 @@ contract PlasmaManager {
     );
 
     /// now check for bunch inclusion proof
+    bool _outp = verifyMerkleProof(
+    // bool _outp = Merkle.verify(
+      _txRoot, // data to verify
+      _blockNumber - bunches[_bunchIndex].startBlockNumber,
+      bunches[_bunchIndex].transactionsMegaRoot,
+      _blockInBunchProof
+    );
 
-    // emit Bool(_outp);
+    emit Bool(_outp);
+  }
+
+  function verifyMerkleProof(
+    bytes32 leaf,
+    uint256 mainIndex,
+    bytes32 rootHash,
+    bytes memory proof
+  ) public pure returns (bool) {
+    bytes32 proofElement;
+    bytes32 computedHash = leaf;
+    require(proof.length % 32 == 0, "Invalid proof length");
+
+    uint256 index = mainIndex;
+    for (uint256 i = 32; i <= proof.length; i += 32) {
+      assembly {
+        proofElement := mload(add(proof, i))
+      }
+
+      if (index % 2 == 0) {
+        computedHash = keccak256(
+          abi.encodePacked(computedHash, proofElement)
+        );
+      } else {
+        computedHash = keccak256(
+          abi.encodePacked(proofElement, computedHash)
+        );
+      }
+
+      index = index / 2;
+    }
+    return computedHash == rootHash;
   }
 
   function getNextStartBlockNumber() private view returns (uint256) {
