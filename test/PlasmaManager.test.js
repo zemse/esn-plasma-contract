@@ -17,6 +17,8 @@ const { GetProof } = require('eth-proof');
 const esnNodeUrl = 'http://13.127.185.136:80';
 const getProof = new GetProof(esnNodeUrl);
 
+const { removeNumericKeysFromStruct, fetchBlocksAndReturnMegaRoot, getProofOfBunchInclusion, getBunchIndex, parseTx } = require('../helpers');
+
 /// @dev initialising development blockchain
 const provider = new ethers.providers.Web3Provider(ganache.provider({ gasLimit: 8000000 }));
 const providerESN = new ethers.providers.JsonRpcProvider(esnNodeUrl);
@@ -31,6 +33,7 @@ let accounts, esInstance, plasmaManagerInstance;
 const bunchDepthCases = [1,2,3,2,1]; // bunch cases will be prepared according to this.
 // proofs will be generated for this transaction on ESN.
 const provingTxHash = '0xec45c3c6b3f392a54bddad672c3d9eb12fb190a16d082bbd774e70f5ce8e6723';
+const esnDepositAddress = '0xd5Dd476dE0a26AdB8069fc36537ab3A6b85192a4';
 
 // preparing bunch cases
 let tempStartBlockNumber = 0; // for setting the start blocknumber
@@ -43,203 +46,6 @@ const bunchCases = bunchDepthCases.map(bunchDepth => {
   return bunchCase;
 });
 console.log({bunchCases});
-
-function removeNumericKeysFromStruct(inputStruct) {
-  return Object.fromEntries(Object.entries(inputStruct).filter((entry, i) => {
-    if(entry[0] === 'length') return false;
-    if(entry[0] === String(i)) return false;
-    return true;
-  }));
-}
-
-async function fetchBlocksAndReturnMegaRoot(startBlockNumber, bunchDepth) {
-  if(startBlockNumber instanceof ethers.utils.BigNumber) startBlockNumber = startBlockNumber.toNumber();
-  if(bunchDepth instanceof ethers.utils.BigNumber) bunchDepth = bunchDepth.toNumber();
-  function getMegaRoot(inputArray) {
-    if(inputArray.length === 1) return inputArray[0];
-
-    if(inputArray.length && (inputArray.length & (inputArray.length-1)) !== 0) {
-      throw new Error('inputArray should be of length of power 2');
-    }
-    const reducedArray = [];
-    inputArray.reduce((accumulator, currentValue) => {
-      if(accumulator) {
-        // reducedArray.push(`[${accumulator}===${currentValue}]`);
-        // console.log(accumulator+' '+(currentValue).slice(2));
-        reducedArray.push(ethers.utils.keccak256(accumulator+(currentValue).slice(2)));
-        return null;
-      } else {
-        return currentValue;
-      }
-    });
-    return getMegaRoot(reducedArray);
-  }
-
-  const blockNumbersToScan = [...Array(2**bunchDepth).keys()].map(n => n + startBlockNumber);
-  // console.log({blockNumbersToScan});
-  const blockArray = new Array(2**bunchDepth);
-  await Promise.all(blockNumbersToScan.map(number => {
-    return new Promise(async function(resolve, reject) {
-      const blockNumber = ethers.utils.hexStripZeros(ethers.utils.hexlify(number));
-      // console.log({blockNumber});
-      const block = await providerESN.send('eth_getBlockByNumber', [
-        blockNumber,
-        true
-      ]);
-      console.log(`Received block ${number} from ESN node`);
-      blockArray[number - startBlockNumber] = ({
-        blockNumber: number,
-        transactionsRoot: block.transactionsRoot,
-        receiptsRoot: block.receiptsRoot
-      });
-      // console.log(typeof number)
-      resolve();
-    });
-  }));
-  const txRootArray = blockArray.map(block => block.transactionsRoot);
-  // console.log({blockArray,txRootArray});
-  return getMegaRoot(txRootArray);
-}
-
-async function getProofOfBunchInclusion(startBlockNumber, bunchDepth, blockNumber) {
-  if(startBlockNumber instanceof ethers.utils.BigNumber) startBlockNumber = startBlockNumber.toNumber();
-  if(bunchDepth instanceof ethers.utils.BigNumber) bunchDepth = bunchDepth.toNumber();
-  if(blockNumber instanceof ethers.utils.BigNumber) blockNumber = blockNumber.toNumber();
-  function _getProofOfBunchInclusion(inputArray, index, proof = '0x') {
-    // console.log({inputArray});
-    if(inputArray.length === 1) return proof;
-    if(inputArray.length && (inputArray.length & (inputArray.length-1)) !== 0) {
-      throw new Error('inputArray should be of length of power 2');
-    }
-
-    // index%2 === 1 (odd) then it must be right side
-    // index%2 === 0 (even) then it must be left side
-
-    if(index%2) {
-      proof += '' + inputArray[index-1].slice(2);
-    } else {
-      proof += '' + inputArray[index+1].slice(2);
-    }
-
-    // computing hash of two pairs and storing them in reduced array
-    const reducedArray = [];
-    inputArray.reduce((accumulator, currentValue) => {
-      if(accumulator) {
-        // reducedArray.push(`[${accumulator}===${currentValue}]`);
-        // console.log(accumulator+' '+(currentValue).slice(2));
-        reducedArray.push(ethers.utils.keccak256(accumulator+(currentValue).slice(2)));
-        return null;
-      } else {
-        return currentValue;
-      }
-    });
-
-    return _getProofOfBunchInclusion(reducedArray, Math.floor(index/2), proof);
-  }
-  const blockNumbersToScan = [...Array(2**bunchDepth).keys()].map(n => n + startBlockNumber);
-  // console.log({blockNumbersToScan});
-  const blockArray = new Array(2**bunchDepth);
-
-  await Promise.all(blockNumbersToScan.map(number => {
-    return new Promise(async function(resolve, reject) {
-      const block = await providerESN.send('eth_getBlockByNumber', [
-        ethers.utils.hexStripZeros(ethers.utils.hexlify(number)),
-        true
-      ]);
-      blockArray[number - startBlockNumber] = ({
-        blockNumber: number,
-        transactionsRoot: block.transactionsRoot,
-        receiptsRoot: block.receiptsRoot
-      });
-      // console.log(typeof number)
-      resolve();
-    });
-  }));
-
-  return _getProofOfBunchInclusion(blockArray.map(block => block.transactionsRoot), blockNumber - startBlockNumber);
-}
-
-async function getBunchIndex(txHash) {
-  const txObj = await providerESN.getTransaction(txHash);
-  const blockNumber = txObj.blockNumber;
-  // console.log({blockNumber});
-  const lastBunchIndex = (await plasmaManagerInstance.functions.lastBunchIndex()).toNumber();
-  if(lastBunchIndex === 0) return null;
-  async function checkMiddle(start, end) {
-    const current = Math.floor((start + end)/2);
-    // console.log({start, end, current});
-    const bunch = await plasmaManagerInstance.functions.bunches(current);
-    const startBlockNumber = bunch.startBlockNumber.toNumber();
-    const endBlockNumber = bunch.startBlockNumber.toNumber() + 2**bunch.bunchDepth.toNumber();
-    // console.log({startBlockNumber, blockNumber, endBlockNumber});
-    if(startBlockNumber <= blockNumber && blockNumber <= endBlockNumber) {
-      // the block is in bunch with index current
-      return current;
-    } else if(blockNumber < startBlockNumber) {
-      // the block is in a bunch earlier than in bunch with index current
-      return checkMiddle(start, Math.floor((start+end)/2));
-    } else if(blockNumber > endBlockNumber) {
-      // the block is in a bunch later than in bunch with index current
-      return checkMiddle(Math.ceil((start+end)/2), end);
-    } else if(start === end) {
-      // the block is not even in the last bunch
-      return null;
-    }
-  }
-
-  const bunchIndex = await checkMiddle(0, lastBunchIndex - 1);
-  return bunchIndex;
-}
-
-const interfaceArray = [];
-async function parseTx(tx) {
-  const r = await (await tx).wait();
-  const gasUsed = r.gasUsed.toNumber();
-  console.group();
-  console.log(`Gas used: ${gasUsed} / ${ethers.utils.formatEther(r.gasUsed.mul(ethers.utils.parseUnits('1','gwei')))} ETH / ${gasUsed / 50000} ERC20 transfers`);
-
-  const buildFolderPath = path.resolve(__dirname, '..', 'build');
-  const filesToIgnore = {'.DS_Store': true};
-
-  function loadABIFromThisDirectory(relativePathArray = []) {
-    const pathArray = [buildFolderPath, ...relativePathArray];
-    fs.readdirSync(path.resolve(buildFolderPath, ...relativePathArray)).forEach(childName => {
-      if(filesToIgnore[childName]) return;
-      const childPathArray = [...relativePathArray, childName];
-      // console.log({childPathArray});
-      if(fs.lstatSync(path.resolve(buildFolderPath, ...childPathArray)).isDirectory()) {
-        loadABIFromThisDirectory(childPathArray);
-      } else {
-        const content = JSON.parse(fs.readFileSync(path.resolve(buildFolderPath, ...childPathArray), 'utf8'));
-        // console.log({content});
-        const iface = new ethers.utils.Interface(content.abi);
-        interfaceArray.push(iface);
-      }
-    });
-  }
-
-  if(!interfaceArray.length) loadABIFromThisDirectory();
-
-  r.logs.forEach((log, i) => {
-    let output;
-
-    for(const iface of interfaceArray) {
-      output = iface.parseLog(log);
-      if(output) {
-        break;
-      }
-    }
-
-    if(!output) {
-      console.log({log})
-    } else {
-      const values = removeNumericKeysFromStruct(output.values);
-      console.log(i, output.name, values);
-    }
-  });
-  console.groupEnd();
-  return r;
-}
 
 /// @dev this is a test case collection
 describe('Ganache Setup', async() => {
@@ -313,6 +119,14 @@ describe('Plasma Manager Contract', () => {
         esInstance.functions.transfer(plasmaManagerInstance.address, ethers.utils.parseEther('1000000'))
       );
     });
+
+    it('setting ESN deposit address', async() => {
+      await parseTx(
+        plasmaManagerInstance.functions.setESNDepositAddress(esnDepositAddress)
+      );
+      const esnDepositAddressOutput = await plasmaManagerInstance.functions.esnDepositAddress();
+      assert.equal(esnDepositAddressOutput, esnDepositAddress, 'reverse plasma address should be set properly')
+    });
   });
 
   describe('Plasma Manager Functionality', async() => {
@@ -370,13 +184,13 @@ describe('Plasma Manager Contract', () => {
       const merklePatriciaProofObj = await getProof.transactionProof(provingTxHash);
 
       // console.log({merklePatriciaProofObj});
-      const bunchIndexOfTransaction = await getBunchIndex(provingTxHash);
+      const bunchIndexOfTransaction = await getBunchIndex(provingTxHash, plasmaManagerInstance);
       console.log({bunchIndexOfTransaction});
 
       if(bunchIndexOfTransaction === null) assert.ok(false, 'transaction hash not yet on plasma');
 
       const txObj = await providerESN.getTransaction(provingTxHash);
-      console.log({txObj});
+      // console.log({txObj});
 
       const bunchStruct = await plasmaManagerInstance.functions.bunches(bunchIndexOfTransaction);
 
@@ -414,7 +228,8 @@ describe('Plasma Manager Contract', () => {
       console.log({parsedTx});
 
       assert.equal(parsedTx[0], '0xC8e1F3B9a0CdFceF9fFd2343B943989A22517b26', 'signer address should be correct');
-      assert.ok(parsedTx[1].eq(ethers.utils.parseEther('1.698')), 'signer address should be correct');
+      assert.equal(parsedTx[1], '0x3D2bB9D34D96307942b7cCe133bBF1aAd361C529', 'to address should be correct');
+      assert.ok(parsedTx[2].eq(ethers.utils.parseEther('1.698')), 'signer address should be correct');
     });
   });
 });
