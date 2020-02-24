@@ -9,6 +9,9 @@ const assert = require('assert');
 const ethers = require('ethers');
 const ganache = require('ganache-cli');
 
+const fs = require('fs-extra');
+const path = require('path');
+
 /// @dev connecting to a Era Swap Network Node
 const { GetProof } = require('eth-proof');
 const esnNodeUrl = 'http://13.127.185.136:80';
@@ -188,15 +191,45 @@ async function getBunchIndex(txHash) {
   return bunchIndex;
 }
 
+const interfaceArray = [];
 async function parseTx(tx) {
   const r = await (await tx).wait();
   const gasUsed = r.gasUsed.toNumber();
   console.group();
   console.log(`Gas used: ${gasUsed} / ${ethers.utils.formatEther(r.gasUsed.mul(ethers.utils.parseUnits('1','gwei')))} ETH / ${gasUsed / 50000} ERC20 transfers`);
+
+  const buildFolderPath = path.resolve(__dirname, '..', 'build');
+  const filesToIgnore = {'.DS_Store': true};
+
+  function loadABIFromThisDirectory(relativePathArray = []) {
+    const pathArray = [buildFolderPath, ...relativePathArray];
+    fs.readdirSync(path.resolve(buildFolderPath, ...relativePathArray)).forEach(childName => {
+      if(filesToIgnore[childName]) return;
+      const childPathArray = [...relativePathArray, childName];
+      // console.log({childPathArray});
+      if(fs.lstatSync(path.resolve(buildFolderPath, ...childPathArray)).isDirectory()) {
+        loadABIFromThisDirectory(childPathArray);
+      } else {
+        const content = JSON.parse(fs.readFileSync(path.resolve(buildFolderPath, ...childPathArray), 'utf8'));
+        // console.log({content});
+        const iface = new ethers.utils.Interface(content.abi);
+        interfaceArray.push(iface);
+      }
+    });
+  }
+
+  if(!interfaceArray.length) loadABIFromThisDirectory();
+
   r.logs.forEach((log, i) => {
-    // console.log(i, 'data', log.data);
-    const output = plasmaManagerInstance.interface.parseLog(log)
-     || esInstance.interface.parseLog(log);
+    let output;
+
+    for(const iface of interfaceArray) {
+      output = iface.parseLog(log);
+      if(output) {
+        break;
+      }
+    }
+
     if(!output) {
       console.log({log})
     } else {
