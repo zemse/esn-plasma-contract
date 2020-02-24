@@ -183,6 +183,21 @@ library BytesLib {
         }
     }
 
+    function packedBytesFromUint(uint256 _num) internal pure returns (bytes memory _ret) {
+        bytes memory _bytes32 = fromUint(_num);
+        uint256 _startIndex;
+        for(uint256 i = 0; i < _bytes32.length; i++) {
+          if(_bytes32[i] != byte(0)) {
+            _startIndex = i;
+            break;
+          }
+        }
+        _ret = new bytes(32 - _startIndex);
+        for(uint256 i = _startIndex; i < _bytes32.length; i++) {
+          _ret[i - _startIndex] = _bytes32[i];
+        }
+    }
+
     function toUint(bytes memory _bytes, uint256 _start)
         internal
         pure

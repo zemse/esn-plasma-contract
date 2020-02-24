@@ -6,6 +6,7 @@ import 'lib/RLP.sol';
 import 'lib/Merkle.sol';
 import 'lib/MerklePatriciaProof.sol';
 import 'lib/RLPEncode.sol';
+import 'lib/BytesLib.sol';
 
 // this contract will store block headers
 contract PlasmaManager {
@@ -27,11 +28,13 @@ contract PlasmaManager {
   BunchHeader[] public bunches;
 
   bytes constant PERSONAL_PREFIX = "\x19Ethereum Signed Message:\n";
-  bytes constant CHAIN_ID = hex"2323";
+  uint256 constant CHAIN_ID = 0x2323;
   // bytes constant chainId = hex"62fa"; final this chain id
 
   ERC20 public token;
-  address public plasmaOnESN;
+
+  /// @dev to avoid confusion, there will a same plasma contract address (deployed by )
+  address public esnDepositAddress;
 
   uint8 public zemse;
 
@@ -45,6 +48,7 @@ contract PlasmaManager {
   event Uint8(uint8 _uint8);
   event Bool(bool _bool);
   event Address(address _address);
+  event AddressM(address _address, string _m);
   event NewBunchHeader(
     uint256 _startBlockNumber,
     uint256 _bunchDepth,
@@ -73,8 +77,8 @@ contract PlasmaManager {
     return bunches.length;
   }
 
-  function setPlasmaOnESNAddress(address _plasmaOnESN) public {
-    plasmaOnESN = _plasmaOnESN;
+  function setESNDepositAddress(address _esnDepositAddress) public {
+    esnDepositAddress = _esnDepositAddress;
   }
 
   function submitBunchHeader(bytes memory _signedHeader) public {
@@ -184,18 +188,31 @@ contract PlasmaManager {
       , 'Invalid Merkle Proof'
     );
 
-    (address _signer, uint256 _value) = parseTransaction(_rawTx);
+    (address _signer, address _to, uint256 _value, uint256 _chainId) = parseTransaction(_rawTx);
 
-    // to of the transaction should be plasmaOnESN address
+    require(
+      _to == esnDepositAddress,
+      'transfer should be made to ESN Deposit Address'
+    );
+    // require(
+    //   _to == address(this),
+    //   'transfer should be made to ESN Deposit Address'
+    // );
+
+    require(
+      _chainId == CHAIN_ID
+      , 'invalid chain id of the transaction'
+    );
 
     processedWithdrawals[_txHash] = true;
 
     token.transfer(_signer, _value);
   }
 
-  function parseTransaction(bytes memory _rawTx) public pure returns (address, uint256) {
+  function parseTransaction(bytes memory _rawTx) public pure returns (address, address, uint256, uint256) {
     RLP.RLPItem[] memory _txDecoded = _rawTx.toRLPItem().toList();
 
+    address _to = _txDecoded[3].toAddress();
     uint256 _value = _txDecoded[4].toUint();
 
     uint256 _v = _txDecoded[6].toUint();
@@ -205,16 +222,19 @@ contract PlasmaManager {
     bytes[] memory _unsignedTransactionList;
 
     uint8 _actualV;
+    uint256 _chainId;
 
     if(_v > 28) {
       _unsignedTransactionList = new bytes[](9);
       if(_v % 2 == 0) {
         _actualV = 28;
-        // _hey[6] = abi.encodePacked((_v - 36) / 2);
       } else {
         _actualV = 27;
       }
-      _unsignedTransactionList[6] = CHAIN_ID;
+
+      _chainId = (_v - _actualV - 8) / 2;
+
+      _unsignedTransactionList[6] = BytesLib.packedBytesFromUint(_chainId);
     } else {
       _unsignedTransactionList = new bytes[](6);
       _actualV = uint8(_v);
@@ -225,16 +245,10 @@ contract PlasmaManager {
     }
 
     bytes memory _unsignedTransaction = RLPEncode.encodeList(_unsignedTransactionList);
-    //
-    // emit Uint256(_v);
-    // emit Uint8(_actualV);
-    // emit Bytes32M(_r, 'r');
-    // emit Bytes32M(_s, 's');
 
     address _signer = ecrecover(keccak256(_unsignedTransaction), _actualV, _r, _s);
-    // emit Address(_signer);
 
-    return (_signer, _value);
+    return (_signer, _to, _value, _chainId);
   }
 
   function verifyMerkleProof(
