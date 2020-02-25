@@ -45,7 +45,16 @@ const deployFile = async jsonFileName => {
     wallet
   );
 
-  const contractInstance = await ContractFactory.deploy(...process.argv.slice(5));
+  const args = process.argv.slice(5);
+
+  for(const i in args) {
+    const split = args[i].split(',')
+    if(split.length > 1) {
+      args[i] = split;
+    }
+  }
+
+  const contractInstance = await ContractFactory.deploy(...args);
   console.log(`Deploying '${jsonFileName}' contract at ${contractInstance.address}\nhttps://${process.argv[3] !== 'homestead' ? process.argv[3] : 'www'}.etherscan.io/tx/${contractInstance.deployTransaction.hash}\nwaiting for confirmation...`);
 
   await contractInstance.deployTransaction.wait();
