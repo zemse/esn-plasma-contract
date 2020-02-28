@@ -1,10 +1,12 @@
 pragma solidity 0.6.3;
 
 import 'ERC20.sol';
+import 'lib/EthParser.sol';
 // import 'lib/ECVerify.sol';
 import 'lib/RLP.sol';
 import 'lib/Merkle.sol';
 import 'lib/MerklePatriciaProof.sol';
+// import 'lib/Patricia.sol';
 import 'lib/RLPEncode.sol';
 import 'lib/BytesLib.sol';
 
@@ -47,6 +49,7 @@ contract PlasmaManager {
   event Uint256M(uint256 _num, string _m);
   event Uint8(uint8 _uint8);
   event Bool(bool _bool);
+  event BoolM(bool _bool, string m);
   event Address(address _address);
   event AddressM(address _address, string _m);
   event NewBunchHeader(
@@ -164,22 +167,35 @@ contract PlasmaManager {
       , 'Already processed withdrawal for this transaction'
     );
 
-    require(
-      MerklePatriciaProof.verify(_rawTx, _txIndex, _txInBlockProof, _txRoot)
-      , 'Invalid Merkle Patricia Proof'
-    );
+    // require(
+    //   MerklePatriciaProof.verify(_rawTx, _txIndex, _txInBlockProof, _txRoot)
+    //   , 'Invalid Merkle Patricia Proof'
+    // );
+    // require(
+      emit BytesM(_txIndex, '_txIndex');
+      // bytes memory xx = ProvethVerifier.validateMPTProof(_txRoot, _txIndex, _txInBlockProof.toRLPItem().toList());
+    //   , 'Invalid Merkle Patricia Proof'
+    // );
+    // emit Byt/esM(xx, 'value from proveth');
+    bool patriciaResult = MerklePatriciaProof.verify(_rawTx, _txIndex, _txInBlockProof, _txRoot);
+    emit BoolM(patriciaResult, 'patriciaResult');
+
+    // MerklePatriciaProof.verify(_rawTx, _txIndex, _txInBlockProof, _txRoot);
+
 
     /// now check for bunch inclusion proof
     // bool _outp = verifyMerkleProof(
-    // // bool _outp = Merkle.verify(
-    //   _txRoot, // data to verify
-    //   _blockNumber - bunches[_bunchIndex].startBlockNumber,
-    //   bunches[_bunchIndex].transactionsMegaRoot,
-    //   _blockInBunchProof
-    // );
+    bool _outp = Merkle.verify(
+      _txRoot, // data to verify
+      _blockNumber - bunches[_bunchIndex].startBlockNumber,
+      bunches[_bunchIndex].transactionsMegaRoot,
+      _blockInBunchProof
+    );
+
+    emit BoolM(_outp, '_outp');
 
     require(
-      verifyMerkleProof(
+      Merkle.verify(
         _txRoot, // data to verify
         _blockNumber - bunches[_bunchIndex].startBlockNumber,
         bunches[_bunchIndex].transactionsMegaRoot,
@@ -188,7 +204,7 @@ contract PlasmaManager {
       , 'Invalid Merkle Proof'
     );
 
-    (address _signer, address _to, uint256 _value, uint256 _chainId) = parseTransaction(_rawTx);
+    (address _signer, address _to, uint256 _value, ) = EthParser.parseTransaction(_rawTx);
 
     require(
       _to == esnDepositAddress,
@@ -198,88 +214,15 @@ contract PlasmaManager {
     //   _to == address(this),
     //   'transfer should be made to ESN Deposit Address'
     // );
-
-    require(
-      _chainId == CHAIN_ID
-      , 'invalid chain id of the transaction'
-    );
+    //
+    // require(
+    //   _chainId == 0 || _chainId == CHAIN_ID
+    //   , 'invalid chain id of the transaction'
+    // );
 
     processedWithdrawals[_txHash] = true;
 
     token.transfer(_signer, _value);
-  }
-
-  function parseTransaction(bytes memory _rawTx) public pure returns (address, address, uint256, uint256) {
-    RLP.RLPItem[] memory _txDecoded = _rawTx.toRLPItem().toList();
-
-    address _to = _txDecoded[3].toAddress();
-    uint256 _value = _txDecoded[4].toUint();
-
-    uint256 _v = _txDecoded[6].toUint();
-    bytes32 _r = _txDecoded[7].toBytes32();
-    bytes32 _s = _txDecoded[8].toBytes32();
-
-    bytes[] memory _unsignedTransactionList;
-
-    uint8 _actualV;
-    uint256 _chainId;
-
-    if(_v > 28) {
-      _unsignedTransactionList = new bytes[](9);
-      if(_v % 2 == 0) {
-        _actualV = 28;
-      } else {
-        _actualV = 27;
-      }
-
-      _chainId = (_v - _actualV - 8) / 2;
-
-      _unsignedTransactionList[6] = BytesLib.packedBytesFromUint(_chainId);
-    } else {
-      _unsignedTransactionList = new bytes[](6);
-      _actualV = uint8(_v);
-    }
-
-    for(uint256 i = 0; i < 6; i++) {
-      _unsignedTransactionList[i] = _txDecoded[i].toBytes();
-    }
-
-    bytes memory _unsignedTransaction = RLPEncode.encodeList(_unsignedTransactionList);
-
-    address _signer = ecrecover(keccak256(_unsignedTransaction), _actualV, _r, _s);
-
-    return (_signer, _to, _value, _chainId);
-  }
-
-  function verifyMerkleProof(
-    bytes32 leaf,
-    uint256 mainIndex,
-    bytes32 rootHash,
-    bytes memory proof
-  ) public pure returns (bool) {
-    bytes32 proofElement;
-    bytes32 computedHash = leaf;
-    require(proof.length % 32 == 0, "Invalid proof length");
-
-    uint256 index = mainIndex;
-    for (uint256 i = 32; i <= proof.length; i += 32) {
-      assembly {
-        proofElement := mload(add(proof, i))
-      }
-
-      if (index % 2 == 0) {
-        computedHash = keccak256(
-          abi.encodePacked(computedHash, proofElement)
-        );
-      } else {
-        computedHash = keccak256(
-          abi.encodePacked(proofElement, computedHash)
-        );
-      }
-
-      index = index / 2;
-    }
-    return computedHash == rootHash;
   }
 
   function getNextStartBlockNumber() private view returns (uint256) {

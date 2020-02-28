@@ -6,7 +6,7 @@ library Merkle {
         uint256 mainIndex,
         bytes32 rootHash,
         bytes memory proof
-    ) public pure returns (bool) {
+    ) internal pure returns (bool) {
         bytes32 proofElement;
         bytes32 computedHash = leaf;
         require(proof.length % 32 == 0, "Invalid proof length");

@@ -13,9 +13,10 @@ const fs = require('fs-extra');
 const path = require('path');
 
 /// @dev connecting to a Era Swap Network Node
-const { GetProof } = require('eth-proof');
+const { GetProof, VerifyProof } = require('eth-proof');
 const esnNodeUrl = 'http://13.127.185.136:80';
 const getProof = new GetProof(esnNodeUrl);
+const verifyProof = new VerifyProof(esnNodeUrl);
 
 const { removeNumericKeysFromStruct, fetchBlocksAndReturnMegaRoot, getProofOfBunchInclusion, getBunchIndex, parseTx } = require('../helpers');
 
@@ -32,7 +33,28 @@ let accounts, esInstance, plasmaManagerInstance;
 
 const bunchDepthCases = [1,2,3,2,1]; // bunch cases will be prepared according to this.
 // proofs will be generated for this transaction on ESN.
+
+// single tx in a block: index 0x0
+// const provingTxHash = '0xc5ef3a04504b15f6166445524b9af05dba5e17a91c661de5f78e09b268849d20';
+
+// 1st of 3 tx in a block: index 0x0: path: 0x0080
+// const provingTxHash = '0x5717ab3bf858ece72312765463ff274e4a325bdd5aa24bb5aa681f65676b7d1f';
+
+// 2nd of 3 tx in a block: index 0x1
 const provingTxHash = '0xec45c3c6b3f392a54bddad672c3d9eb12fb190a16d082bbd774e70f5ce8e6723';
+
+function getPathFromTransactionIndex(number) {
+  if(typeof number !== 'number') {
+    return null;
+  }
+  if(number === 0) {
+    return '0x0080';
+  }
+  const hex = number.toString(16);
+  // return '0x'+(hex.length%2?'00':'1')+hex;
+  return '0x'+'00'+hex;
+}
+
 const esnDepositAddress = '0xd5Dd476dE0a26AdB8069fc36537ab3A6b85192a4';
 
 // preparing bunch cases
@@ -183,7 +205,7 @@ describe('Plasma Manager Contract', () => {
       console.log('Sending Proof');
       const merklePatriciaProofObj = await getProof.transactionProof(provingTxHash);
 
-      // console.log({merklePatriciaProofObj});
+      console.log({merklePatriciaProofObj});
       const bunchIndexOfTransaction = await getBunchIndex(provingTxHash, plasmaManagerInstance);
       console.log({bunchIndexOfTransaction});
 
@@ -203,7 +225,9 @@ describe('Plasma Manager Contract', () => {
       );
       const txRoot = '0x' + merklePatriciaProofObj.header[4].toString('hex')
       const rawTransaction = txObj.raw;
-      const path = '0x00' + merklePatriciaProofObj.txIndex.slice(2);
+      // const path = '0x11'; // merklePatriciaProofObj.txIndex.slice(2);
+      // const path = '0x00' + merklePatriciaProofObj.txIndex.slice(2);
+      const path = getPathFromTransactionIndex(+merklePatriciaProofObj.txIndex);
       const parentNodes = ethers.utils.RLP.encode(merklePatriciaProofObj.txProof)
 
       const completeProofArray = [
@@ -218,18 +242,46 @@ describe('Plasma Manager Contract', () => {
       const completeProofRLP = ethers.utils.RLP.encode(completeProofArray);
       console.log({completeProofArray,completeProofRLP});
 
-      await parseTx(
-        plasmaManagerInstance.functions.claimWithdrawal(completeProofRLP)
-      );
+      try {
+        await parseTx(
+          plasmaManagerInstance.functions.claimWithdrawal(completeProofRLP)
+        );
+      } catch(error) {
+        console.log({error});
+      }
+
+      // console.log({verifyProof, VerifyProof, vpPCBA});
+      // for(let j = 0; j < 599; j++) {
+      //   const vp = await VerifyProof.proofContainsValueAt(merklePatriciaProofObj.txProof, '0x'+j.toString(16))
+      //   if(vp) {
+      //     console.log({j, vp});
+      //   }
+      // }
+
+
     });
 
-    it('checking parseTransaction with a tx without chain id', async() => {
-      const parsedTx = await plasmaManagerInstance.functions.parseTransaction('0xf86982119e80827530943d2bb9d34d96307942b7cce133bbf1aad361c5298817908200ec9d0000801ca08f38797a9013772c45e890a56bc82c24c51d06f895546fc80177754b01e7ce57a06da71f056b58608be916174b53e687c2bd3eddc6900f5f520be4c69d0a138fea');
-      console.log({parsedTx});
+    // it('checking parseTransaction with a tx without chain id', async() => {
+    //   const parsedTx = await plasmaManagerInstance.functions.parseTransaction('0xf86982119e80827530943d2bb9d34d96307942b7cce133bbf1aad361c5298817908200ec9d0000801ca08f38797a9013772c45e890a56bc82c24c51d06f895546fc80177754b01e7ce57a06da71f056b58608be916174b53e687c2bd3eddc6900f5f520be4c69d0a138fea');
+    //   console.log({parsedTx});
+    //
+    //   assert.equal(parsedTx[0], '0xC8e1F3B9a0CdFceF9fFd2343B943989A22517b26', 'signer address should be correct');
+    //   assert.equal(parsedTx[1], '0x3D2bB9D34D96307942b7cCe133bBF1aAd361C529', 'to address should be correct');
+    //   assert.ok(parsedTx[2].eq(ethers.utils.parseEther('1.698')), 'signer address should be correct');
+    // });
 
-      assert.equal(parsedTx[0], '0xC8e1F3B9a0CdFceF9fFd2343B943989A22517b26', 'signer address should be correct');
-      assert.equal(parsedTx[1], '0x3D2bB9D34D96307942b7cCe133bBF1aAd361C529', 'to address should be correct');
-      assert.ok(parsedTx[2].eq(ethers.utils.parseEther('1.698')), 'signer address should be correct');
+    it('testing nibbles', async() => {
+      const f = async bytes => console.log({bytes, nibb: await plasmaManagerInstance.functions._getNibbleArray(bytes)});
+
+      await f('0x');
+      await f('0x11');
+      await f('0x4234');
+      await f('0x123456');
+      await f('0x203456');
+
+      await f('0x32000034');
+      await f('0x001234');
+      await f('0x0000120034');
     });
   });
 });
